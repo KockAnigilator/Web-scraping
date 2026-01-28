@@ -15,7 +15,7 @@ import numpy as np
 
 # --- Настройки ---
 # Укажите путь к вашему chromedriver.exe
-CHROMEDRIVER_PATH = "/path/to/chromedriver" # <<< ЗАМЕНИТЕ НА ВАШ ПУТЬ >>>
+CHROMEDRIVER_PATH = r"C:\Users\Dmitriy\Documents\GitHub\Web-scraping\chromedriver.exe" # <<< ЗАМЕНИТЕ НА ВАШ ПУТЬ >>>
 
 SEARCH_QUERIES = {"polar_bear": "polar bear", "brown_bear": "brown bear"}
 IMAGES_NEEDED = 1000
@@ -23,7 +23,7 @@ IMAGES_TO_FETCH = int(IMAGES_NEEDED * 1.1) # Собираем с запасом
 DATASET_DIR = "dataset"
 
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
 }
 # --- /Настройки ---
 
@@ -70,30 +70,50 @@ def scrape_class_images(class_name, query, num_images_needed, num_images_to_fetc
     search_url = f"https://yandex.ru/images/search?text={query}"
     driver.get(search_url)
 
-    # Ждем загрузки страницы поиска
+    # --- ОЖИДАНИЕ ЗАГРУЗКИ СТРАНИЦЫ ---
+    print("  - Ожидание загрузки страницы результатов...")
     try:
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".serp-item__link")))
+        # Ждем появление контейнера списка результатов (он должен появиться после загрузки)
+        # Новый селектор для основного контейнера с изображениями
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".SerpList-Content")))
+        print("  - Страница результатов загружена.")
     except TimeoutException:
-        print(f"  - Ошибка: Не удалось дождаться загрузки результатов поиска для '{query}'")
+        print(f"  - Ошибка: Не удалось дождаться загрузки основного контейнера результатов для '{query}'")
         driver.quit()
         return
+    # --- /ОЖИДАНИЕ ---
 
     # Прокручиваем страницу, чтобы подгрузить больше изображений
     print(f"  - Подгружаем изображения...")
     last_height = driver.execute_script("return document.body.scrollHeight")
-    while True:
+    scroll_pause_time = 2
+    max_scrolls = 50 # Ограничиваем количество прокруток, чтобы не зависать
+    scrolls_done = 0
+    while scrolls_done < max_scrolls:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(2) # Ждать подгрузки
+        time.sleep(scroll_pause_time)
 
         new_height = driver.execute_script("return document.body.scrollHeight")
         if new_height == last_height:
             print("  - Достигнут конец страницы или прокрутка не далее результатов.")
             break
         last_height = new_height
+        scrolls_done += 1
 
-    # Находим элементы миниатюр
-    img_elements = driver.find_elements(By.CSS_SELECTOR, ".serp-item__link")
-    print(f"  - Найдено {len(img_elements)} миниатюр. Начинаю сбор ссылок на оригиналы...")
+    # --- ПОИСК ЭЛЕМЕНТОВ ИЗОБРАЖЕНИЙ ---
+    # Новые селекторы для элементов изображений (ссылки на миниатюры)
+    img_elements = driver.find_elements(By.CSS_SELECTOR, ".SerpItem a.Link.ImagesContentImage-Cover")
+    # Если первый не сработает, можно попробовать этот, он более общий:
+    # img_elements = driver.find_elements(By.CSS_SELECTOR, "a[role='link'].ImagesContentImage-Cover")
+    print(f"  - Найдено {len(img_elements)} потенциальных элементов изображений.")
+    # --- /ПОИСК ---
+
+    if len(img_elements) == 0:
+        print("  - Не удалось найти ни одного элемента изображения.")
+        driver.quit()
+        return
+
+    print(f"  - Начинаю сбор ссылок на оригиналы из {len(img_elements)} найденных миниатюр...")
 
     unique_urls = set()
     for i, elem in enumerate(img_elements):
@@ -106,15 +126,17 @@ def scrape_class_images(class_name, query, num_images_needed, num_images_to_fetc
             driver.execute_script("arguments[0].scrollIntoView();", elem)
             time.sleep(0.1) # Небольшая пауза после прокрутки
 
-            # Кликнуть на миниатюру
+            # Кликнуть на миниатюру (ссылку)
             elem.click()
             
-            # Ждать открытия панели с деталями
+            # --- ОЖИДАНИЕ ОТКРЫТИЯ ПАНЕЛИ ---
+            # Новый селектор для изображения внутри панели просмотра
             detail_view_img = wait.until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, ".MMImage-Origin"))
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".ImagesViewer-View img.MMImage-Preview"))
             )
-            
-            # Получить ссылку на оригинальное изображение
+            # --- /ОЖИДАНИЕ ---
+
+            # Получить ссылку на оригинальное изображение (атрибут src изображения в панели)
             original_url = detail_view_img.get_attribute("src")
             
             if original_url and original_url.startswith(("http://", "https://")):
