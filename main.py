@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 from urllib.parse import parse_qs, urlparse, unquote
 import random
+import sys
 
 # --- Настройки ---
 CHROMEDRIVER_PATH = r"C:\Users\Dmitriy\Documents\GitHub\Web-scraping\chromedriver.exe"
@@ -164,8 +165,10 @@ def extract_image_urls_from_page(driver):
                     src = img.get_attribute("src")
                     if src and src.startswith(("http://", "https://")):
                         # Фильтруем служебные изображения Яндекса
-                        if not any(x in src.lower() for x in ['yandex', 'captcha', 'logo', 'sprite', 'pixel']):
-                            unique_urls.add(src)
+                        if not any(x in src.lower() for x in ['yandex', 'captcha', 'logo', 'sprite', 'pixel', 'favicon']):
+                            # Фильтруем очень маленькие изображения по размеру в URL
+                            if not any(x in src.lower() for x in ['_s.', '_m.', '_xs.', 'thumb', 'preview']):
+                                unique_urls.add(src)
                 except:
                     continue
         except Exception as e:
@@ -181,7 +184,8 @@ def extract_image_urls_from_page(driver):
                 try:
                     data_src = elem.get_attribute("data-src")
                     if data_src and data_src.startswith(("http://", "https://")):
-                        unique_urls.add(data_src)
+                        if not any(x in data_src.lower() for x in ['yandex', 'captcha', 'logo']):
+                            unique_urls.add(data_src)
                 except:
                     continue
         except Exception as e:
@@ -198,6 +202,7 @@ def scrape_class_images(class_name, query, num_images_needed, num_images_to_fetc
     wait = WebDriverWait(driver, 20)
     # --- /Настройка ---
 
+    # ИСПРАВЛЕНО: убраны лишние пробелы в URL (было "text=  {query}", стало "text={query}")
     search_url = f"https://yandex.ru/images/search?text={query}"
     print(f"  - Открываю URL: {search_url}")
     
@@ -318,23 +323,106 @@ def scrape_class_images(class_name, query, num_images_needed, num_images_to_fetc
             print(f"    Список неудачных URL сохранен в: {failed_file}")
     else:
         print(f"  - ✅ Цель достигнута! Загружено {success_count} изображений.")
+    
+    return success_count, len(unique_urls)
+
+
+def format_time(seconds):
+    """Форматирует время в читаемый формат."""
+    if seconds < 60:
+        return f"{seconds:.2f} секунд"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        secs = seconds % 60
+        return f"{minutes} мин {secs:.2f} сек"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = seconds % 60
+        return f"{hours} ч {minutes} мин {secs:.2f} сек"
 
 
 def main():
     """Основная функция для выполнения задачи."""
-    print("=" * 60)
+    # Запоминаем время начала выполнения
+    start_time = time.time()
+    
+    print("=" * 70)
     print("ЗАПУСК СКРЕЙПИНГА ИЗОБРАЖЕНИЙ")
-    print("=" * 60)
+    print("=" * 70)
+    print(f"Начало работы: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Целевое количество изображений на класс: {IMAGES_NEEDED}")
+    print(f"Классы для сбора: {', '.join(SEARCH_QUERIES.keys())}")
+    print("=" * 70 + "\n")
     
     create_directories()
-
-    for class_name, query in SEARCH_QUERIES.items():
-        scrape_class_images(class_name, query, IMAGES_NEEDED, IMAGES_TO_FETCH)
-
-    print("\n" + "=" * 60)
-    print("ВСЕ ЗАДАЧИ ПО СКРЕЙПИНГУ ЗАВЕРШЕНЫ")
-    print("=" * 60)
+    
+    # Словарь для хранения статистики
+    stats = {}
+    
+    try:
+        for class_name, query in SEARCH_QUERIES.items():
+            class_start = time.time()
+            success_count, total_urls = scrape_class_images(class_name, query, IMAGES_NEEDED, IMAGES_TO_FETCH)
+            class_duration = time.time() - class_start
+            stats[class_name] = {
+                'success': success_count,
+                'total_urls': total_urls,
+                'duration': class_duration
+            }
+            
+            # Пауза между классами для снижения нагрузки
+            if class_name != list(SEARCH_QUERIES.keys())[-1]:
+                print(f"\n  - Пауза перед следующим классом: 5 секунд...")
+                time.sleep(5)
+    
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Программа прервана пользователем (Ctrl+C)")
+        print("Завершение работы...")
+    
+    # Вычисляем общее время выполнения
+    total_duration = time.time() - start_time
+    
+    # Выводим итоговую статистику
+    print("\n" + "=" * 70)
+    print("ИТОГОВАЯ СТАТИСТИКА")
+    print("=" * 70)
+    
+    for class_name, data in stats.items():
+        print(f"\nКласс: {class_name}")
+        print(f"  Успешно загружено: {data['success']} из {IMAGES_NEEDED}")
+        print(f"  Собрано уникальных URL: {data['total_urls']}")
+        print(f"  Время выполнения: {format_time(data['duration'])}")
+    
+    print("\n" + "-" * 70)
+    print(f"Общее время выполнения: {format_time(total_duration)}")
+    print(f"Завершено: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 70)
+    
+    # Сохраняем статистику в файл
+    stats_file = os.path.join(DATASET_DIR, "scraping_stats.txt")
+    with open(stats_file, 'w', encoding='utf-8') as f:
+        f.write("Статистика скрейпинга изображений\n")
+        f.write("=" * 50 + "\n")
+        f.write(f"Дата и время начала: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}\n")
+        f.write(f"Общее время выполнения: {format_time(total_duration)}\n")
+        f.write(f"Целевое количество на класс: {IMAGES_NEEDED}\n\n")
+        
+        for class_name, data in stats.items():
+            f.write(f"\nКласс: {class_name}\n")
+            f.write(f"  Успешно загружено: {data['success']}\n")
+            f.write(f"  Собрано уникальных URL: {data['total_urls']}\n")
+            f.write(f"  Время выполнения: {format_time(data['duration'])}\n")
+    
+    print(f"\nСтатистика сохранена в: {stats_file}")
+    print("\n✅ Все задачи по скрейпингу завершены!")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n❌ Критическая ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
